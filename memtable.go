@@ -6,6 +6,9 @@ type MemTable struct {
 	Table *SkipList
 }
 
+type MemTableIterator struct {
+}
+
 func NewMemTable(id uint64) *MemTable {
 	return &MemTable{
 		ID:    id,
@@ -13,10 +16,15 @@ func NewMemTable(id uint64) *MemTable {
 	}
 }
 
-func (m *MemTable) Put(key, value []byte) {
-
+func (m *MemTable) Put(key, val []byte) {
+	m.Table.Insert(key, val)
 }
 
-func (m *MemTable) Get(key []byte) []byte {
+func (m *MemTable) Get(key []byte) ([]byte, bool) {
+
+	return nil, false
+}
+
+func (m *MemTable) Scan(lower, upper []byte) *MemTableIterator {
 
 }
