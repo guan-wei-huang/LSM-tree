@@ -41,17 +41,31 @@ func NewSkiplist() *SkipList {
 	return &list
 }
 
-func (l *SkipList) Insert(key, val []byte) {
+func (l *SkipList) findGreaterOrEqual(key []byte, prev []*Node) *Node {
 	node := l.head
-	prev := make([]*Node, l.maxHeight)
-
 	for i := int(l.curHeight); i >= 0; i-- {
-		forwardNode := node.forward[i]
-		for forwardNode == nil || bytes.Compare(forwardNode.key, key) < 0 {
-			node = forwardNode
+		for node.forward[i] != nil && bytes.Compare(node.forward[i].key, key) < 0 {
+			node = node.forward[i]
 		}
-		prev[i] = node
+		if prev != nil {
+			prev[i] = node
+		}
 	}
+	return node.forward[0]
+}
+
+func (l *SkipList) Get(key []byte) (val []byte, err bool) {
+	node := l.findGreaterOrEqual(key, nil)
+	if node != nil && bytes.Compare(node.key, key) == 0 {
+		copy(val, node.val)
+		return val, true
+	}
+	return nil, false
+}
+
+func (l *SkipList) Insert(key, val []byte) {
+	prev := make([]*Node, l.maxHeight)
+	l.findGreaterOrEqual(key, prev)
 
 	height := l.randomHeight()
 	newNode := NewNode(key, val, height)
