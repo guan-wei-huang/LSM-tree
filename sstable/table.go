@@ -1,4 +1,4 @@
-package table
+package sstable
 
 import (
 	"encoding/binary"
@@ -21,7 +21,7 @@ func DecodeMlockMetaData(data []byte) []*BlockMetaData {
 	return nil
 }
 
-type SSTableWriter struct {
+type TableWriter struct {
 	block    *BlockBuilder
 	firstKey []byte
 	offset   int
@@ -29,14 +29,14 @@ type SSTableWriter struct {
 	// default: 4 KB
 	blockSize int
 
-	tableID int
+	tableID uint64
 	writer  io.Writer
 
 	metaData []*BlockMetaData
 }
 
-func NewSSTableWriter(id int, writer io.Writer, blockSize int) *SSTableWriter {
-	return &SSTableWriter{
+func NewTableWriter(id uint64, writer io.Writer, blockSize int) *TableWriter {
+	return &TableWriter{
 		block:     NewBlockBuilder(),
 		firstKey:  nil,
 		offset:    0,
@@ -47,7 +47,7 @@ func NewSSTableWriter(id int, writer io.Writer, blockSize int) *SSTableWriter {
 	}
 }
 
-func (s *SSTableWriter) Append(key, val []byte) {
+func (s *TableWriter) Append(key, val []byte) {
 	if s.firstKey == nil {
 		s.firstKey = make([]byte, len(key))
 		copy(s.firstKey, key)
@@ -59,7 +59,7 @@ func (s *SSTableWriter) Append(key, val []byte) {
 	}
 }
 
-func (s *SSTableWriter) finishBlock() error {
+func (s *TableWriter) finishBlock() error {
 	encBlock := EncodeBlock(s.block.build())
 	n, err := s.writer.Write(encBlock)
 	if err != nil {
@@ -77,41 +77,41 @@ func (s *SSTableWriter) finishBlock() error {
 	return nil
 }
 
-func (s *SSTableWriter) Reset() {
+func (s *TableWriter) Reset() {
 	s.block.reset()
 	s.firstKey = nil
 }
 
 // Write sstable to file
-func (s *SSTableWriter) Flush() error {
+func (s *TableWriter) Flush() (uint64, error) {
 	if s.firstKey != nil {
 		if err := s.finishBlock(); err != nil {
-			return err
+			return 0, err
 		}
 	}
 
 	encMetaData := EncodeBlockMetaData(s.metaData)
 	n, err := s.writer.Write(encMetaData)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	footer := make([]byte, 8)
+	// start index of meta block
 	binary.BigEndian.PutUint32(footer[0:4], uint32(s.offset))
+	// len of meta block
 	binary.BigEndian.PutUint32(footer[4:8], uint32(n))
 	if _, err = s.writer.Write(footer); err != nil {
-		return err
+		return 0, err
 	}
 
-	return nil
+	return uint64(s.offset + n + 8), nil
 }
 
-func (s *SSTableWriter) Build() {
-
+type TableReader struct {
+	r *io.ReaderAt
 }
 
-type SSTable struct {
-	id int
+func NewTableReader() *TableReader {
 
-	metaBlock []*BlockMetaData
 }

@@ -2,7 +2,7 @@ package iterator
 
 type Iterator interface {
 	First()
-	Next() bool
+	Next()
 	Valid() bool
 	Key() []byte
 	Value() []byte
