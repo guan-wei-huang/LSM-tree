@@ -1,12 +1,17 @@
 package lsm
 
 import (
+	"lsm/sstable"
 	"sync"
 )
 
 type Table struct {
 	id   uint64
 	size uint64
+}
+
+func (t *Table) getTableName() string {
+	return fileName(SstableFile, t.id)
 }
 
 type Storage struct {
@@ -25,8 +30,21 @@ func NewStorage() *Storage {
 func (s *Storage) get(key []byte) ([]byte, bool) {
 	// TODO: read table when major compacting
 	for i := len(s.level0) - 1; i > -1; i-- {
+		table := s.level0[i]
+		tName := table.getTableName()
+		f, err := openFile(tName, true)
+		if err != nil {
+			// TODO: panic
+			return nil, false
+		}
+		reader, err := sstable.NewTableReader(f, int(table.size))
+		if err != nil {
+			return nil, false
+		}
 
 	}
+
+	return nil, false
 }
 
 func (s *Storage) addTable(id, size uint64) {

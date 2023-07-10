@@ -6,7 +6,7 @@ import (
 )
 
 // create file if doesnt exist
-func OpenFile(fname string, readOnly bool) (*os.File, error) {
+func openFile(fname string, readOnly bool) (*os.File, error) {
 	flag := os.O_CREATE | os.O_RDONLY
 	if !readOnly {
 		flag |= os.O_RDWR
