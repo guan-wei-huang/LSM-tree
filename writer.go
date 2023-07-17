@@ -16,7 +16,7 @@ type Writer struct {
 }
 
 func NewWriter(path string) *Writer {
-	file, err := OpenFile(path, false)
+	file, err := openFile(path, false)
 	if err != nil {
 		panic(err)
 	}

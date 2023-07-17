@@ -3,6 +3,8 @@ package sstable
 import (
 	"bytes"
 	"encoding/binary"
+	"lsm/compare"
+	"lsm/iterator"
 )
 
 type BlockBuilder struct {
@@ -119,33 +121,106 @@ func (b *Block) entry(i int) (key, val []byte, ok bool) {
 	return b.data[idx : idx+int(keyLen)], b.data[idx+int(keyLen) : idx+int(keyLen)+int(valLen)], true
 }
 
-// seek binary search for greater or equal key, and return its idx
-func (b *Block) seek(key []byte) int {
-	cmp := func(i int) bool {
+// seek binary search for greater or equal key, and return its idx; return -1 if not found
+func (b *Block) seek(cmp compare.Comparator, key []byte) int {
+	f := func(i int) bool {
 		ikey, _, _ := b.entry(i)
-		return bytes.Compare(key, ikey) > 0
+		return cmp.Compare(ikey, key) < 0
 	}
 
 	low, high := 0, len(b.offset)-1
 	for low < high {
 		mid := (low + high) >> 1
-		if cmp(mid) {
+		if f(mid) {
 			low = mid + 1
 		} else {
 			high = mid
 		}
 	}
+
+	fkey, _, _ := b.entry(low)
+	if cmp.Compare(fkey, key) < 0 {
+		return -1
+	}
 	return low
 }
 
-func (b *Block) get(key []byte) (val []byte, ok bool) {
-	idx := b.seek(key)
-	_, val, ok = b.entry(idx)
-	return
+// TODO: check necessity
+// func (b *Block) get(key []byte) ([]byte, bool) {
+// 	idx := b.seek(key)
+// 	ekey, val, _ := b.entry(idx)
+// 	if !bytes.Equal(ekey, key) {
+// 		return nil, false
+// 	}
+// 	return val, true
+// }
+
+var _ iterator.Iterator = (*BlockIterator)(nil)
+
+type BlockIterator struct {
+	cmp compare.Comparator
+
+	block  *Block
+	curIdx int
+
+	key, val []byte
 }
 
-// entryBlock is for index block, to get i-th block's info
-func (b *Block) entryBlock(i int) (minKey []byte, blockOffset, blockLen uint64, ok bool) {
+func NewBlockIterator(cmp compare.Comparator, b *Block) *BlockIterator {
+	iter := &BlockIterator{
+		cmp:    cmp,
+		block:  b,
+		curIdx: 0,
+	}
+	iter.First()
+	return iter
+}
+
+func (i *BlockIterator) First() {
+	i.curIdx = 0
+	i.key, i.val, _ = i.block.entry(0)
+}
+
+// Next set key, val to nil if hit endpoint
+func (i *BlockIterator) Next() {
+	i.curIdx += 1
+	i.key, i.val, _ = i.block.entry(i.curIdx)
+}
+
+func (i *BlockIterator) Prev() {
+	// TODO
+}
+
+func (i *BlockIterator) Key() []byte {
+	return i.key
+}
+
+func (i *BlockIterator) Value() []byte {
+	return i.val
+}
+
+func (i *BlockIterator) Valid() bool {
+	return i.key != nil
+}
+
+func (i *BlockIterator) Seek(target []byte) {
+	idx := i.block.seek(i.cmp, target)
+	i.key, i.val, _ = i.block.entry(idx)
+	i.curIdx = idx
+}
+
+/*
+index block format:
+
+	| block1 minKey len | block1 offset | block1 len | block1 minKey | ...
+	| block1 index offset | block2 index offset | ... | number of blocks
+*/
+type IndexBlock struct {
+	*Block
+}
+
+// entry is for index block, to get i-th block's info
+func (b *IndexBlock) entry(i int) (minKey []byte, blockOffset, blockLen uint64, ok bool) {
 	if i < 0 || i >= len(b.offset) {
 		ok = false
 		return
@@ -162,18 +237,18 @@ func (b *Block) entryBlock(i int) (minKey []byte, blockOffset, blockLen uint64, 
 	return
 }
 
-// seekBlock is for index block, to find the block that may contain key
-func (b *Block) seekBlock(key []byte) int {
-	cmp := func(i int) bool {
-		minKey, _, _, _ := b.entryBlock(i)
-		return bytes.Compare(minKey, key) <= 0
+// seek is for index block, to find the block that may contain key
+func (b *IndexBlock) seek(cmp compare.Comparator, key []byte) int {
+	f := func(i int) bool {
+		minKey, _, _, _ := b.entry(i)
+		return cmp.Compare(minKey, key) <= 0
 	}
 
 	low, high := 0, len(b.offset)-1
 	for low < high {
 		// add 1 to avoid infinite loop
 		mid := (low + high + 1) >> 1
-		if cmp(mid) {
+		if f(mid) {
 			low = mid
 		} else {
 			high = mid - 1
@@ -182,54 +257,40 @@ func (b *Block) seekBlock(key []byte) int {
 	return low
 }
 
-type BlockIterator struct {
-	block  *Block
-	curIdx int
+type IndexBlockIterator struct {
+	cmp compare.Comparator
 
-	key, val []byte
+	indexBlock *IndexBlock
 }
 
-func NewBlockIterator(b *Block) *BlockIterator {
-	iter := &BlockIterator{
-		block: b,
-	}
-	iter.First()
-	return iter
+func NewIndexBlockIterator(cmp compare.Comparator, block *IndexBlock) *IndexBlockIterator {
+	return &IndexBlockIterator{cmp, block}
 }
 
-func (i *BlockIterator) First() {
-	i.curIdx = 0
-	i.key, i.val, _ = i.block.entry(0)
+func (i *IndexBlockIterator) First() {
+
 }
 
-func (i *BlockIterator) Next() bool {
-	i.curIdx += 1
-	ok := false
-	i.key, i.val, ok = i.block.entry(i.curIdx)
-	return ok
+func (i *IndexBlockIterator) Next() {
+
 }
 
-func (i *BlockIterator) Key() []byte {
-	return i.key
+func (i *IndexBlockIterator) Prev() {
+
 }
 
-func (i *BlockIterator) Value() []byte {
-	return i.val
+func (i *IndexBlockIterator) Seek(key []byte) {
+
 }
 
-func (i *BlockIterator) Valid() bool {
-	return i.key != nil
+func (i *IndexBlockIterator) Valid() bool {
+
 }
 
-func (i *BlockIterator) Seek(targetKey []byte) bool {
-	idx := i.block.seek(targetKey)
-	key, val, ok := i.block.entry(idx)
-	if !ok || bytes.Compare(key, targetKey) < 0 {
-		return false
-	}
+func (i *IndexBlockIterator) Key() []byte {
 
-	i.curIdx = idx
-	i.key = key
-	i.val = val
-	return true
+}
+
+func (i *IndexBlockIterator) Value() []byte {
+
 }

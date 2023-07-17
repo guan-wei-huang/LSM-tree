@@ -42,6 +42,9 @@ func (s *Storage) get(key []byte) ([]byte, bool) {
 			return nil, false
 		}
 
+		if val, err := reader.Get(key); err == nil {
+			return val, true
+		}
 	}
 
 	return nil, false

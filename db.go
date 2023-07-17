@@ -35,6 +35,8 @@ func New() *DB {
 }
 
 func (d *DB) Put(key, val []byte) {
+	d.journal.Write(encodeWriteData(WriteOperationPut, key, val))
+
 	mtable, _ := d.getMemTables(false)
 	mtable.Put(key, val)
 	mtable.unref()
@@ -87,7 +89,7 @@ func (d *DB) memCompaction() {
 	table := d.immtable
 
 	fname := fileName(SstableFile, table.id)
-	f, err := OpenFile(fname, false)
+	f, err := openFile(fname, false)
 	if err != nil {
 		d.errCompact <- err
 		return

@@ -11,31 +11,10 @@ func ErrorNotFound(key []byte) error {
 	return fmt.Errorf("key: %v not found", key)
 }
 
-type BlockMetaData struct {
-	offset int
-	minKey []byte
-}
-
-func EncodeBlockMetaData(b []*BlockMetaData) []byte {
-	// like block encoder
-	// TODO: after finish close sstable file
-	return nil
-}
-
-func DecodeMlockMetaData(data []byte) []*BlockMetaData {
-	// TODO: after finish close sstable file
-	return nil
-}
-
 /*
 table format:
 
 	| block1 | block2 | .. | index block |  index block offset | index block len |
-
-index block format:
-
-	| block1 minKey len | block1 offset | block1 len | block1 minKey | ...
-	| block1 index offset | block2 index offset | ... | number of blocks
 */
 type TableWriter struct {
 	block    *BlockBuilder
@@ -49,8 +28,6 @@ type TableWriter struct {
 	writer  io.Writer
 
 	indexBlock *BlockBuilder
-
-	metaData []*BlockMetaData
 }
 
 func NewTableWriter(id uint64, writer io.Writer, blockSize int) *TableWriter {
@@ -62,7 +39,6 @@ func NewTableWriter(id uint64, writer io.Writer, blockSize int) *TableWriter {
 		tableID:    id,
 		writer:     writer,
 		indexBlock: NewBlockBuilder(),
-		metaData:   make([]*BlockMetaData, 0),
 	}
 }
 
@@ -127,12 +103,10 @@ func (s *TableWriter) Flush() (uint64, error) {
 }
 
 type TableReader struct {
-	r io.ReaderAt
-
+	r    io.ReaderAt
 	size int
 
-	dataBlock  *Block
-	indexBlock *Block
+	indexBlock *IndexBlock
 }
 
 func NewTableReader(r io.ReaderAt, tableSize int) (*TableReader, error) {
@@ -151,8 +125,7 @@ func NewTableReader(r io.ReaderAt, tableSize int) (*TableReader, error) {
 	reader := &TableReader{
 		r:          r,
 		size:       tableSize,
-		dataBlock:  nil,
-		indexBlock: idxBlock,
+		indexBlock: &IndexBlock{idxBlock},
 	}
 	return reader, nil
 }
@@ -168,13 +141,13 @@ func readBlock(r io.ReaderAt, offset, size uint32, tableSize int) (*Block, error
 
 func (r *TableReader) Get(key []byte) ([]byte, error) {
 	// smaller than table's min key
-	minKey, _, _ := r.indexBlock.entry(0)
+	minKey, _, _, _ := r.indexBlock.entry(0)
 	if bytes.Compare(key, minKey) < 0 {
 		return nil, ErrorNotFound(key)
 	}
 
-	idx := r.indexBlock.seekBlock(key)
-	_, off, size, _ := r.indexBlock.entryBlock(idx)
+	idx := r.indexBlock.seek(key)
+	_, off, size, _ := r.indexBlock.entry(idx)
 
 	block, err := readBlock(r.r, uint32(off), uint32(size), r.size)
 	if err != nil {

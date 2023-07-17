@@ -12,7 +12,7 @@ func openFile(fname string, readOnly bool) (*os.File, error) {
 		flag |= os.O_RDWR
 	}
 	// TODO: file path
-	file, err := os.OpenFile(path, flag, 0640)
+	file, err := os.OpenFile(fname, flag, 0640)
 	if err != nil {
 		return nil, err
 	}
