@@ -16,9 +16,6 @@ type MemTable struct {
 	wg sync.WaitGroup
 }
 
-type MemTableIterator struct {
-}
-
 func NewMemTable(id uint64) *MemTable {
 	return &MemTable{
 		id:    id,
@@ -67,22 +64,10 @@ func (m *MemTable) wait() {
 	m.wg.Wait()
 }
 
-func (i *MemTableIterator) First() {
-
+type MemTableIterator struct {
+	*SkipListIter
 }
 
-func (i *MemTableIterator) Next() {
-
-}
-
-func (i *MemTableIterator) Valid() bool {
-
-}
-
-func (i *MemTableIterator) Key() []byte {
-
-}
-
-func (i *MemTableIterator) Value() []byte {
+func NewMemtableIterator() *MemTableIterator {
 
 }

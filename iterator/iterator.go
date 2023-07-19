@@ -15,6 +15,47 @@ type Iterator interface {
 	Value() []byte
 }
 
+type IndexIterator interface {
+	Iterator
+	Get() Iterator
+}
+
+type TwoLevelIterator struct {
+	IndexIterator
+}
+
+func NewTwoLevelIterator() *TwoLevelIterator {
+
+}
+
+func (i *TwoLevelIterator) First() {
+
+}
+
+func (i *TwoLevelIterator) Next() {
+
+}
+
+func (i *TwoLevelIterator) Prev() {
+
+}
+
+func (i *TwoLevelIterator) Seek(key []byte) {
+
+}
+
+func (i *TwoLevelIterator) Valid() bool {
+
+}
+
+func (i *TwoLevelIterator) Key() []byte {
+
+}
+
+func (i *TwoLevelIterator) Value() []byte {
+
+}
+
 type MergeIterator struct {
 	cmp compare.Comparator
 

@@ -1,10 +1,10 @@
 package sstable
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
+	"lsm/compare"
 )
 
 func ErrorNotFound(key []byte) error {
@@ -56,7 +56,7 @@ func (s *TableWriter) Append(key, val []byte) {
 
 func (s *TableWriter) finishBlock() error {
 	dataBlock := s.block.build()
-	encBlock := EncodeBlock(dataBlock)
+	encBlock := encodeBlock(dataBlock)
 	n, err := s.writer.Write(encBlock)
 	if err != nil {
 		return err
@@ -84,7 +84,7 @@ func (s *TableWriter) Flush() (uint64, error) {
 	}
 
 	indexBlock := s.indexBlock.build()
-	encIndexBlock := EncodeBlock(indexBlock)
+	encIndexBlock := encodeBlock(indexBlock)
 	n, err := s.writer.Write(encIndexBlock)
 	if err != nil {
 		return 0, err
@@ -106,6 +106,8 @@ type TableReader struct {
 	r    io.ReaderAt
 	size int
 
+	cmp compare.Comparator
+
 	indexBlock *IndexBlock
 }
 
@@ -117,7 +119,7 @@ func NewTableReader(r io.ReaderAt, tableSize int) (*TableReader, error) {
 	idxOffset := binary.BigEndian.Uint32(footer[:4])
 	idxSize := binary.BigEndian.Uint32(footer[4:8])
 
-	idxBlock, err := readBlock(r, idxOffset, idxSize, tableSize)
+	idxBlock, err := readBlock(r, idxOffset, idxSize)
 	if err != nil {
 		return nil, err
 	}
@@ -130,32 +132,22 @@ func NewTableReader(r io.ReaderAt, tableSize int) (*TableReader, error) {
 	return reader, nil
 }
 
-func readBlock(r io.ReaderAt, offset, size uint32, tableSize int) (*Block, error) {
-	data := make([]byte, size)
-	if _, err := r.ReadAt(data, int64(offset)); err != nil {
-		return nil, err
-	}
-
-	return DecodeBlock(data), nil
-}
-
 func (r *TableReader) Get(key []byte) ([]byte, error) {
-	// smaller than table's min key
-	minKey, _, _, _ := r.indexBlock.entry(0)
-	if bytes.Compare(key, minKey) < 0 {
+	idx := r.indexBlock.seek(r.cmp, key)
+	meta, _ := r.indexBlock.entry(idx)
+	if meta == nil {
 		return nil, ErrorNotFound(key)
 	}
 
-	idx := r.indexBlock.seek(key)
-	_, off, size, _ := r.indexBlock.entry(idx)
+	off, size := decodeIndexBlock(meta)
 
-	block, err := readBlock(r.r, uint32(off), uint32(size), r.size)
+	block, err := readBlock(r.r, uint32(off), uint32(size))
 	if err != nil {
 		return nil, err
 	}
 
 	// TODO: due to bloom filter, its only necessary to check for 'ok'
-	val, ok := block.get(key)
+	val, ok := block.get(r.cmp, key)
 	if !ok {
 		return nil, ErrorNotFound(key)
 	}

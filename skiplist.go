@@ -28,10 +28,6 @@ type SkipList struct {
 	head *Node
 }
 
-type SkipListIter struct {
-	node *Node
-}
-
 func NewSkiplist() *SkipList {
 	list := SkipList{
 		maxHeight: 12,
@@ -82,12 +78,6 @@ func (l *SkipList) Insert(key, val []byte) {
 	}
 }
 
-func (l *SkipList) NewIterator() *SkipListIter {
-	return &SkipListIter{
-		l.head.forward[0],
-	}
-}
-
 func (l *SkipList) randomHeight() uint {
 	var height uint = 1
 	for height < l.maxHeight && rand.Float32() >= l.prob {
@@ -96,22 +86,45 @@ func (l *SkipList) randomHeight() uint {
 	return height
 }
 
-func (it *SkipListIter) Key() []byte {
-	return it.node.key
+type SkipListIter struct {
+	list *SkipList
+	node *Node
 }
 
-func (it *SkipListIter) Value() []byte {
-	return it.node.val
-}
-
-func (it *SkipListIter) Next() bool {
-	if it.node == nil {
-		return false
+func NewSkiplistIterator(list *SkipList) *SkipListIter {
+	return &SkipListIter{
+		list: list,
+		node: list.head.forward[0],
 	}
-	it.node = it.node.forward[0]
-	return true
 }
 
-func (it *SkipListIter) Valid() bool {
-	return it.node != nil
+func (i *SkipListIter) First() {
+	i.node = i.list.head.forward[0]
+}
+
+func (i *SkipListIter) Key() []byte {
+	return i.node.key
+}
+
+func (i *SkipListIter) Value() []byte {
+	return i.node.val
+}
+
+func (i *SkipListIter) Next() {
+	if i.node != nil {
+		i.node = i.node.forward[0]
+	}
+}
+
+func (i *SkipListIter) Prev() {
+	// TODO
+}
+
+func (i *SkipListIter) Seek(key []byte) {
+	n := i.list.findGreaterOrEqual(key, nil)
+	i.node = n
+}
+
+func (i *SkipListIter) Valid() bool {
+	return i.node != nil
 }

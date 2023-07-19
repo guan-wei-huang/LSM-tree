@@ -3,6 +3,7 @@ package sstable
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
 	"lsm/compare"
 	"lsm/iterator"
 )
@@ -83,31 +84,8 @@ type Block struct {
 	offset []uint32
 }
 
-func EncodeBlock(b *Block) []byte {
-	// TODO: reuse slice
-	sizeBuf := make([]byte, 4*len(b.offset)+4)
-	for i, off := range b.offset {
-		binary.BigEndian.PutUint32(sizeBuf[4*i:], off)
-	}
-	binary.BigEndian.PutUint32(sizeBuf[4*len(b.offset):], uint32(len(b.offset)))
-
-	b.data = append(b.data, sizeBuf...)
-	return b.data
-}
-
-func DecodeBlock(data []byte) *Block {
-	size := len(data)
-	num := int(binary.BigEndian.Uint32(data[size-4:]))
-	offset := make([]uint32, num)
-	offsetIdx := size - 4 - 4*num
-	for i := 0; i < num; i += 1 {
-		offset[i] = binary.BigEndian.Uint32(data[offsetIdx+4*i:])
-	}
-
-	return &Block{
-		data:   data[:offsetIdx],
-		offset: offset,
-	}
+func (b *Block) numEntries() int {
+	return len(b.offset)
 }
 
 func (b *Block) entry(i int) (key, val []byte, ok bool) {
@@ -145,15 +123,14 @@ func (b *Block) seek(cmp compare.Comparator, key []byte) int {
 	return low
 }
 
-// TODO: check necessity
-// func (b *Block) get(key []byte) ([]byte, bool) {
-// 	idx := b.seek(key)
-// 	ekey, val, _ := b.entry(idx)
-// 	if !bytes.Equal(ekey, key) {
-// 		return nil, false
-// 	}
-// 	return val, true
-// }
+func (b *Block) get(cmp compare.Comparator, key []byte) ([]byte, bool) {
+	idx := b.seek(cmp, key)
+	ekey, val, _ := b.entry(idx)
+	if cmp.Compare(ekey, key) != 0 {
+		return nil, false
+	}
+	return val, true
+}
 
 var _ iterator.Iterator = (*BlockIterator)(nil)
 
@@ -219,29 +196,31 @@ type IndexBlock struct {
 	*Block
 }
 
-// entry is for index block, to get i-th block's info
-func (b *IndexBlock) entry(i int) (minKey []byte, blockOffset, blockLen uint64, ok bool) {
+// entry get i'th entry's content, desc: i'th block offset & len
+func (b *IndexBlock) entry(i int) (desc []byte, minKey []byte) {
 	if i < 0 || i >= len(b.offset) {
-		ok = false
-		return
+		return nil, nil
 	}
+
 	idx := int(b.offset[i])
 	keyLen, n1 := binary.Uvarint(b.data[idx:])
-	blockOffset, n2 := binary.Uvarint(b.data[idx+n1:])
-	blockLen, n3 := binary.Uvarint(b.data[idx+n1+n2:])
+	_, n2 := binary.Uvarint(b.data[idx+n1:])
+	_, n3 := binary.Uvarint(b.data[idx+n1+n2:])
 
-	idx = idx + n1 + n2 + n3
-	minKey = b.data[idx : idx+int(keyLen)]
-
-	ok = true
-	return
+	keyIdx := idx + n1 + n2 + n3
+	return b.data[idx+n1 : keyIdx], b.data[keyIdx : keyIdx+int(keyLen)]
 }
 
 // seek is for index block, to find the block that may contain key
 func (b *IndexBlock) seek(cmp compare.Comparator, key []byte) int {
 	f := func(i int) bool {
-		minKey, _, _, _ := b.entry(i)
+		_, minKey := b.entry(i)
 		return cmp.Compare(minKey, key) <= 0
+	}
+
+	_, minKey := b.entry(0)
+	if cmp.Compare(key, minKey) < 0 {
+		return -1
 	}
 
 	low, high := 0, len(b.offset)-1
@@ -257,40 +236,71 @@ func (b *IndexBlock) seek(cmp compare.Comparator, key []byte) int {
 	return low
 }
 
+var _ iterator.IndexIterator = (*IndexBlockIterator)(nil)
+
 type IndexBlockIterator struct {
+	r   io.ReaderAt
 	cmp compare.Comparator
 
 	indexBlock *IndexBlock
+
+	curIdx int
+
+	key, val []byte
 }
 
-func NewIndexBlockIterator(cmp compare.Comparator, block *IndexBlock) *IndexBlockIterator {
-	return &IndexBlockIterator{cmp, block}
+func NewIndexBlockIterator(r io.ReaderAt, cmp compare.Comparator, block *IndexBlock) *IndexBlockIterator {
+	i := &IndexBlockIterator{
+		r:          r,
+		cmp:        cmp,
+		indexBlock: block,
+	}
+	i.First()
+	return i
 }
 
 func (i *IndexBlockIterator) First() {
-
+	i.curIdx = 0
+	i.key, i.val = i.indexBlock.entry(0)
 }
 
 func (i *IndexBlockIterator) Next() {
-
+	i.curIdx = max(i.curIdx+1, i.indexBlock.numEntries())
+	i.key, i.val = i.indexBlock.entry(i.curIdx)
 }
 
 func (i *IndexBlockIterator) Prev() {
-
+	i.curIdx = min(i.curIdx-1, -1)
+	i.key, i.val = i.indexBlock.entry(i.curIdx)
 }
 
 func (i *IndexBlockIterator) Seek(key []byte) {
-
+	idx := i.indexBlock.seek(i.cmp, key)
+	i.curIdx = idx
 }
 
 func (i *IndexBlockIterator) Valid() bool {
-
+	return i.curIdx < i.indexBlock.numEntries() && i.curIdx > 0
 }
 
 func (i *IndexBlockIterator) Key() []byte {
-
+	return i.key
 }
 
 func (i *IndexBlockIterator) Value() []byte {
+	return i.val
+}
 
+func (i *IndexBlockIterator) Get() iterator.Iterator {
+	if !i.Valid() {
+		return nil
+	}
+
+	offset, size := decodeIndexBlock(i.key)
+	b, err := readBlock(i.r, uint32(offset), uint32(size))
+	if err != nil {
+		// TODO: panic
+		return nil
+	}
+	return NewBlockIterator(i.cmp, b)
 }
