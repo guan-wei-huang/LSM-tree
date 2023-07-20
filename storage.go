@@ -1,17 +1,28 @@
 package lsm
 
 import (
+	"lsm/iterator"
 	"lsm/sstable"
+	"os"
 	"sync"
 )
 
 type Table struct {
 	id   uint64
-	size uint64
+	size int
 }
 
 func (t *Table) getTableName() string {
 	return fileName(SstableFile, t.id)
+}
+
+func (t *Table) open(readOnly bool) (*os.File, error) {
+	name := t.getTableName()
+	f, err := openFile(name, readOnly)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
 }
 
 type Storage struct {
@@ -31,13 +42,12 @@ func (s *Storage) get(key []byte) ([]byte, bool) {
 	// TODO: read table when major compacting
 	for i := len(s.level0) - 1; i > -1; i-- {
 		table := s.level0[i]
-		tName := table.getTableName()
-		f, err := openFile(tName, true)
+		f, err := table.open(true)
 		if err != nil {
 			// TODO: panic
 			return nil, false
 		}
-		reader, err := sstable.NewTableReader(f, int(table.size))
+		reader, err := sstable.NewTableReader(f, table.size)
 		if err != nil {
 			return nil, false
 		}
@@ -50,8 +60,30 @@ func (s *Storage) get(key []byte) ([]byte, bool) {
 	return nil, false
 }
 
+func (s *Storage) getIterator() []iterator.Iterator {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	iters := make([]iterator.Iterator, len(s.level0))
+	for i, table := range s.level0 {
+		f, err := table.open(true)
+		if err != nil {
+			// TODO: panic
+			continue
+		}
+
+		reader, err := sstable.NewTableReader(f, table.size)
+		if err != nil {
+			continue
+		}
+
+		iters[i] = reader.NewIterator()
+	}
+	return iters
+}
+
 func (s *Storage) addTable(id, size uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.level0 = append(s.level0, &Table{id, size})
+	s.level0 = append(s.level0, &Table{id, int(size)})
 }

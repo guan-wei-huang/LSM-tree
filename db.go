@@ -1,6 +1,8 @@
 package lsm
 
 import (
+	"lsm/compare"
+	"lsm/iterator"
 	"lsm/sstable"
 	"sync"
 )
@@ -19,6 +21,8 @@ type DB struct {
 	storage *Storage
 
 	*journal
+
+	cmp compare.Comparator
 }
 
 func New() *DB {
@@ -71,6 +75,22 @@ func (d *DB) Get(key []byte) []byte {
 		return val
 	}
 	return nil
+}
+
+func (d *DB) NewIterator() iterator.Iterator {
+	iters := make([]iterator.Iterator, 0)
+
+	mtable, immtable := d.getMemTables(true)
+	iters = append(iters, mtable.NewIterator())
+
+	if immtable != nil {
+		iters = append(iters, immtable.NewIterator())
+	}
+
+	iters = append(iters, d.storage.getIterator()...)
+
+	mergeIter := iterator.NewMergeIterator(iters, d.cmp)
+	return mergeIter
 }
 
 func (d *DB) goCompaction() {

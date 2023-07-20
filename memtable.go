@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"lsm/iterator"
 	"sync"
 )
 
@@ -68,6 +69,10 @@ type MemTableIterator struct {
 	*SkipListIter
 }
 
-func NewMemtableIterator() *MemTableIterator {
+var _ iterator.Iterator = (*MemTableIterator)(nil)
 
+func NewMemtableIterator(list *SkipList) *MemTableIterator {
+	return &MemTableIterator{
+		SkipListIter: NewSkiplistIterator(list),
+	}
 }

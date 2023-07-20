@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"lsm/compare"
+	"lsm/iterator"
 )
 
 func ErrorNotFound(key []byte) error {
@@ -152,4 +153,10 @@ func (r *TableReader) Get(key []byte) ([]byte, error) {
 		return nil, ErrorNotFound(key)
 	}
 	return val, nil
+}
+
+func (r *TableReader) NewIterator() iterator.Iterator {
+	indexIter := NewIndexBlockIterator(r.r, r.cmp, r.indexBlock)
+
+	return iterator.NewTwoLevelIterator(indexIter)
 }
