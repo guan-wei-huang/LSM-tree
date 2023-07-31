@@ -18,26 +18,23 @@ table format:
 	| block1 | block2 | .. | index block |  index block offset | index block len |
 */
 type TableWriter struct {
-	block    *BlockBuilder
-	firstKey []byte
-	offset   int
+	block      *BlockBuilder
+	indexBlock *BlockBuilder
+	firstKey   []byte
+	offset     int
 
 	// default: 4 KB
 	blockSize int
 
-	tableID uint64
-	writer  io.Writer
-
-	indexBlock *BlockBuilder
+	writer io.WriteCloser
 }
 
-func NewTableWriter(id uint64, writer io.Writer, blockSize int) *TableWriter {
+func NewTableWriter(writer io.WriteCloser, blockSize int) *TableWriter {
 	return &TableWriter{
 		block:      NewBlockBuilder(),
 		firstKey:   nil,
 		offset:     0,
 		blockSize:  blockSize,
-		tableID:    id,
 		writer:     writer,
 		indexBlock: NewBlockBuilder(),
 	}
@@ -45,11 +42,10 @@ func NewTableWriter(id uint64, writer io.Writer, blockSize int) *TableWriter {
 
 func (s *TableWriter) Append(key, val []byte) {
 	if s.firstKey == nil {
-		s.firstKey = make([]byte, len(key))
-		copy(s.firstKey, key)
+		s.firstKey = key
 	}
-	s.block.append(key, val)
 
+	s.block.append(key, val)
 	if s.block.estimateSize() >= s.blockSize {
 		s.finishBlock()
 	}
@@ -66,18 +62,18 @@ func (s *TableWriter) finishBlock() error {
 	s.indexBlock.appendIndex(s.firstKey, s.offset, n)
 
 	s.offset += n
-	s.Reset()
+	s.reset()
 
 	return nil
 }
 
-func (s *TableWriter) Reset() {
+func (s *TableWriter) reset() {
 	s.block.reset()
 	s.firstKey = nil
 }
 
 // Write sstable to file
-func (s *TableWriter) Flush() (uint64, error) {
+func (s *TableWriter) Flush() (tableSize uint64, err error) {
 	if s.firstKey != nil {
 		if err := s.finishBlock(); err != nil {
 			return 0, err
@@ -101,6 +97,14 @@ func (s *TableWriter) Flush() (uint64, error) {
 	}
 
 	return uint64(s.offset + n + 8), nil
+}
+
+func (s *TableWriter) EstimateSize() int {
+	return s.offset
+}
+
+func (s *TableWriter) Close() {
+	s.writer.Close()
 }
 
 type TableReader struct {

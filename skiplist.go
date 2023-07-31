@@ -2,6 +2,7 @@ package lsm
 
 import (
 	"bytes"
+	"lsm/compare"
 	"math/rand"
 )
 
@@ -26,13 +27,17 @@ type SkipList struct {
 	prob      float32
 
 	head *Node
+
+	cmp compare.Comparator
 }
 
-func NewSkiplist() *SkipList {
+func NewSkiplist(cmp compare.Comparator) *SkipList {
 	list := SkipList{
 		maxHeight: 12,
 		prob:      0.5,
 		head:      NewNode(nil, nil, 12),
+
+		cmp: cmp,
 	}
 	return &list
 }
@@ -52,7 +57,7 @@ func (l *SkipList) findGreaterOrEqual(key []byte, prev []*Node) *Node {
 
 func (l *SkipList) Get(key []byte) (val []byte, err bool) {
 	node := l.findGreaterOrEqual(key, nil)
-	if node != nil && bytes.Compare(node.key, key) == 0 {
+	if node != nil && l.cmp.Compare(node.key, key) == 0 {
 		copy(val, node.val)
 		return val, true
 	}

@@ -1,12 +1,12 @@
 package lsm
 
 import (
+	"lsm/compare"
 	"lsm/iterator"
 	"sync"
 )
 
 type MemTable struct {
-	id    uint64
 	size  int
 	table *SkipList
 
@@ -17,10 +17,9 @@ type MemTable struct {
 	wg sync.WaitGroup
 }
 
-func NewMemTable(id uint64) *MemTable {
+func NewMemTable(cmp compare.Comparator) *MemTable {
 	return &MemTable{
-		id:    id,
-		table: NewSkiplist(),
+		table: NewSkiplist(cmp),
 	}
 }
 
@@ -40,11 +39,13 @@ func (m *MemTable) Get(key []byte) ([]byte, bool) {
 }
 
 func (m *MemTable) Scan(lower, upper []byte) *MemTableIterator {
-
+	// TODO
+	return nil
 }
 
 func (m *MemTable) NewIterator() *MemTableIterator {
-
+	iter := NewSkiplistIterator(m.table)
+	return &MemTableIterator{iter}
 }
 
 func (m *MemTable) estimateSize() int {
@@ -53,12 +54,10 @@ func (m *MemTable) estimateSize() int {
 
 func (m *MemTable) ref() {
 	m.wg.Add(1)
-	// atomic.AddInt32(&m.ref, 1)
 }
 
 func (m *MemTable) unref() {
 	m.wg.Done()
-	// atomic.AddInt32(&m.ref, -1)
 }
 
 func (m *MemTable) wait() {

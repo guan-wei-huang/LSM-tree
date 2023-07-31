@@ -3,35 +3,36 @@ package lsm
 import (
 	"lsm/compare"
 	"lsm/iterator"
-	"lsm/sstable"
 	"sync"
 )
 
 type DB struct {
-	nextTableID uint64
-
 	mtable   *MemTable
 	immtable *MemTable
 
 	mu sync.RWMutex
 
-	execCompact chan bool
-	errCompact  chan error
+	memCompact   chan bool
+	levelCompact chan int
+	errCompact   chan error
 
 	storage *Storage
 
-	*journal
+	journal *journal
 
 	cmp compare.Comparator
 }
 
 func New() *DB {
 	db := &DB{
-		nextTableID: 1,
-		mtable:      NewMemTable(0),
-		immtable:    nil,
-		mu:          sync.RWMutex{},
+		memCompact:   make(chan bool),
+		levelCompact: make(chan int),
+		errCompact:   make(chan error),
+
+		cmp: DefaultComparator,
 	}
+	db.storage = NewStorage(db)
+	db.newMem()
 
 	go db.goCompaction()
 
@@ -49,10 +50,9 @@ func (d *DB) Put(key, val []byte) {
 		d.mu.Lock()
 		if d.immtable != mtable {
 			d.immtable = mtable
-			d.mtable = NewMemTable(d.nextTableID)
-			d.nextTableID += 1
+			d.newMem()
 
-			d.execCompact <- true
+			d.memCompact <- true
 		}
 		d.mu.Unlock()
 	}
@@ -87,7 +87,7 @@ func (d *DB) NewIterator() iterator.Iterator {
 		iters = append(iters, immtable.NewIterator())
 	}
 
-	iters = append(iters, d.storage.getIterator()...)
+	iters = append(iters, d.storage.newIterator()...)
 
 	mergeIter := iterator.NewMergeIterator(iters, d.cmp)
 	return mergeIter
@@ -96,11 +96,14 @@ func (d *DB) NewIterator() iterator.Iterator {
 func (d *DB) goCompaction() {
 	for {
 		select {
-		case <-d.execCompact:
+		case <-d.memCompact:
 			if d.immtable != nil {
 				d.memCompaction()
 				continue
 			}
+		case level := <-d.levelCompact:
+			compact := d.storage.peekCompaction(level)
+			d.majorCompaction(compact)
 		}
 	}
 }
@@ -108,30 +111,22 @@ func (d *DB) goCompaction() {
 func (d *DB) memCompaction() {
 	table := d.immtable
 
-	fname := fileName(SstableFile, table.id)
-	f, err := openFile(fname, false)
-	if err != nil {
-		d.errCompact <- err
-		return
-	}
-	defer f.Close()
-
 	// wait other put request done
 	table.wait()
 
 	iter := table.NewIterator()
-	tableWriter := sstable.NewTableWriter(table.id, f, DefaultBlockSize)
+	tWriter := d.storage.newTable()
 	for ; iter.Valid(); iter.Next() {
-		tableWriter.Append(iter.Key(), iter.Value())
+		tWriter.append(iter.Key(), iter.Value())
 	}
 
-	tableSize, err := tableWriter.Flush()
+	tInfo, err := tWriter.finish()
 	if err != nil {
 		d.errCompact <- err
 		return
 	}
 
-	d.storage.addTable(table.id, tableSize)
+	d.storage.addTable(0, tInfo)
 
 	d.mu.Lock()
 	d.immtable = nil
@@ -152,4 +147,21 @@ func (d *DB) getMemTables(readonly bool) (m, imm *MemTable) {
 	}
 
 	return m, imm
+}
+
+func (d *DB) newMem() {
+	d.mtable = NewMemTable(d.cmp)
+
+	id := d.storage.nextFileId
+	f, err := openFile(fileName(LogFile, id), false)
+	if err != nil {
+		// TODO: panic
+		return
+	}
+
+	if d.journal == nil {
+		d.journal = NewJournal(f)
+	} else {
+		d.journal.Reset(f)
+	}
 }

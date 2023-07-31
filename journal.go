@@ -2,7 +2,6 @@ package lsm
 
 import (
 	"encoding/binary"
-	"fmt"
 	"io"
 )
 
@@ -40,9 +39,9 @@ type journal struct {
 	w io.WriteCloser
 }
 
-func NewJournal(id uint64) *journal {
+func NewJournal(w io.WriteCloser) *journal {
 	j := &journal{}
-	j.Reset(id)
+	j.Reset(w)
 
 	return j
 }
@@ -55,11 +54,6 @@ func (j *journal) Finish() {
 	j.w.Close()
 }
 
-func (j *journal) Reset(id uint64) {
-	f, err := openFile(fileName(LogFile, id), false)
-	if err != nil {
-		panic(fmt.Sprintf("create log file err: %v", err))
-	}
-
-	j.w = f
+func (j *journal) Reset(w io.WriteCloser) {
+	j.w = w
 }

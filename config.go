@@ -1,5 +1,7 @@
 package lsm
 
+import "lsm/compare"
+
 const (
 	KB = 1024
 	MB = 1024 * KB
@@ -7,7 +9,11 @@ const (
 
 const (
 	DefaultBlockSize    = 4 * KB
-	DefaultMemtableSize = 4 * MB
+	DefaultMemtableSize = 2 * MB
+
+	Level0FileNumber = 5
+	FileSize         = 2 * MB
+	Level1FilesSize  = 10 * MB
 )
 
 type FileType int
@@ -19,3 +25,5 @@ const (
 
 type Config struct {
 }
+
+var DefaultComparator = compare.BasicComparator{}
