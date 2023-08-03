@@ -14,6 +14,9 @@ const (
 	Level0FileNumber = 5
 	FileSize         = 2 * MB
 	Level1FilesSize  = 10 * MB
+
+	FileCacheCapacity  = 500
+	BlockCacheCapacity = 8 * MB
 )
 
 type FileType int

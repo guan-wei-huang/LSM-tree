@@ -6,6 +6,7 @@ import (
 	"io"
 	"lsm/compare"
 	"lsm/iterator"
+	cache "lsm/lru-cache"
 )
 
 func ErrorNotFound(key []byte) error {
@@ -114,9 +115,17 @@ type TableReader struct {
 	cmp compare.Comparator
 
 	indexBlock *IndexBlock
+
+	blockCache cache.Cache
 }
 
-func NewTableReader(r io.ReaderAt, tableSize int) (*TableReader, error) {
+func NewTableReader(r io.ReaderAt, tableSize int, blockCache cache.Cache) (*TableReader, error) {
+	reader := &TableReader{
+		r:          r,
+		size:       tableSize,
+		blockCache: blockCache,
+	}
+
 	footer := make([]byte, 8)
 	if _, err := r.ReadAt(footer, int64(tableSize-8)); err != nil {
 		return nil, err
@@ -124,16 +133,12 @@ func NewTableReader(r io.ReaderAt, tableSize int) (*TableReader, error) {
 	idxOffset := binary.BigEndian.Uint32(footer[:4])
 	idxSize := binary.BigEndian.Uint32(footer[4:8])
 
-	idxBlock, err := readBlock(r, idxOffset, idxSize)
+	idxBlock, err := reader.readBlock(uint64(idxOffset), uint64(idxSize))
 	if err != nil {
 		return nil, err
 	}
+	reader.indexBlock = &IndexBlock{idxBlock}
 
-	reader := &TableReader{
-		r:          r,
-		size:       tableSize,
-		indexBlock: &IndexBlock{idxBlock},
-	}
 	return reader, nil
 }
 
@@ -144,9 +149,9 @@ func (r *TableReader) Get(key []byte) ([]byte, error) {
 		return nil, ErrorNotFound(key)
 	}
 
-	off, size := decodeIndexBlock(meta)
+	off, size := decodeIndexEntry(meta)
 
-	block, err := readBlock(r.r, uint32(off), uint32(size))
+	block, err := r.readBlock(off, size)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +165,23 @@ func (r *TableReader) Get(key []byte) ([]byte, error) {
 }
 
 func (r *TableReader) NewIterator() iterator.Iterator {
-	indexIter := NewIndexBlockIterator(r.r, r.cmp, r.indexBlock)
+	indexIter := NewIndexBlockIterator(r, r.indexBlock)
 
 	return iterator.NewTwoLevelIterator(indexIter)
+}
+
+func (r *TableReader) readBlock(offset, size uint64) (*Block, error) {
+	block := r.blockCache.Get(offset, func() (interface{}, int64) {
+		data := make([]byte, size)
+		if _, err := r.r.ReadAt(data, int64(offset)); err != nil {
+			// TODO: handle err
+			return nil, 0
+		}
+		return decodeBlock(data), int64(len(data))
+	})
+
+	if block == nil {
+		return nil, fmt.Errorf("read block error")
+	}
+	return block.(*Block), nil
 }

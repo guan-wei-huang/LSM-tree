@@ -3,7 +3,6 @@ package sstable
 import (
 	"bytes"
 	"encoding/binary"
-	"io"
 	"lsm/compare"
 	"lsm/iterator"
 )
@@ -239,8 +238,7 @@ func (b *IndexBlock) seek(cmp compare.Comparator, key []byte) int {
 var _ iterator.IndexIterator = (*IndexBlockIterator)(nil)
 
 type IndexBlockIterator struct {
-	r   io.ReaderAt
-	cmp compare.Comparator
+	reader *TableReader
 
 	indexBlock *IndexBlock
 
@@ -249,10 +247,9 @@ type IndexBlockIterator struct {
 	key, val []byte
 }
 
-func NewIndexBlockIterator(r io.ReaderAt, cmp compare.Comparator, block *IndexBlock) *IndexBlockIterator {
+func NewIndexBlockIterator(reader *TableReader, block *IndexBlock) *IndexBlockIterator {
 	i := &IndexBlockIterator{
-		r:          r,
-		cmp:        cmp,
+		reader:     reader,
 		indexBlock: block,
 	}
 	i.First()
@@ -275,7 +272,7 @@ func (i *IndexBlockIterator) Prev() {
 }
 
 func (i *IndexBlockIterator) Seek(key []byte) {
-	idx := i.indexBlock.seek(i.cmp, key)
+	idx := i.indexBlock.seek(i.reader.cmp, key)
 	i.curIdx = idx
 }
 
@@ -296,11 +293,11 @@ func (i *IndexBlockIterator) Get() iterator.Iterator {
 		return nil
 	}
 
-	offset, size := decodeIndexBlock(i.key)
-	b, err := readBlock(i.r, uint32(offset), uint32(size))
+	offset, size := decodeIndexEntry(i.key)
+	b, err := i.reader.readBlock(offset, size)
 	if err != nil {
 		// TODO: panic
 		return nil
 	}
-	return NewBlockIterator(i.cmp, b)
+	return NewBlockIterator(i.reader.cmp, b)
 }

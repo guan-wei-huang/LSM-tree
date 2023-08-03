@@ -49,11 +49,11 @@ func (d *DB) majorCompaction(compact *compaction) {
 			continue
 		}
 		if compact.level == 0 && i == 0 {
-			for _, file := range levelFiles {
-				iters = append(iters, file.newIterator())
+			for _, table := range levelFiles {
+				iters = append(iters, d.storage.newIterator(table))
 			}
 		} else {
-			idxIter := levelFiles.newIndexIterator(d.cmp)
+			idxIter := levelFiles.newIndexIterator(d.storage, d.cmp)
 			iter := iterator.NewTwoLevelIterator(idxIter)
 			iters = append(iters, iter)
 		}

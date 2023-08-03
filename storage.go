@@ -1,13 +1,15 @@
 package lsm
 
 import (
+	"fmt"
 	"lsm/compare"
 	"lsm/iterator"
+	cache "lsm/lru-cache"
 	"lsm/sstable"
-	"os"
 	"sync"
 )
 
+// tWriter is wrapper of sstable.TableWriter
 type tWriter struct {
 	id uint64
 	w  *sstable.TableWriter
@@ -55,45 +57,22 @@ func (t *table) getTableName() string {
 	return fileName(SstableFile, t.id)
 }
 
-func (t *table) open(readOnly bool) (*os.File, error) {
-	name := t.getTableName()
-	f, err := openFile(name, readOnly)
-	if err != nil {
-		return nil, err
-	}
-	return f, nil
-}
-
-func (t *table) newIterator() iterator.Iterator {
-	f, err := t.open(true)
-	if err != nil {
-		// TODO: error handling
-		return nil
-	}
-
-	reader, err := sstable.NewTableReader(f, t.size)
-	if err != nil {
-		return nil
-	}
-
-	return reader.NewIterator()
-}
-
 type tables []*table
 
-func (t *tables) newIndexIterator(cmp compare.Comparator) iterator.IndexIterator {
-	return newLevelFilesIterator(*t, cmp)
+func (t *tables) newIndexIterator(s *Storage, cmp compare.Comparator) iterator.IndexIterator {
+	return newLevelFilesIterator(s, *t, cmp)
 }
 
 type levelFilesIterator struct {
+	s   *Storage
 	cmp compare.Comparator
 
 	tables
 	idx int
 }
 
-func newLevelFilesIterator(ts tables, cmp compare.Comparator) *levelFilesIterator {
-	iter := levelFilesIterator{cmp, ts, 0}
+func newLevelFilesIterator(s *Storage, ts tables, cmp compare.Comparator) *levelFilesIterator {
+	iter := levelFilesIterator{s, cmp, ts, 0}
 	return &iter
 }
 
@@ -143,26 +122,35 @@ func (i *levelFilesIterator) Get() iterator.Iterator {
 	if !i.Valid() {
 		return nil
 	}
-	return i.tables[i.idx].newIterator()
+	reader, err := i.s.open(i.tables[i.idx])
+	if err != nil {
+		return nil
+	}
+	return reader.NewIterator()
 }
 
 type Storage struct {
 	db *DB
 
 	level0 []*table
-	levels [][]*table
+	levels []tables
 
 	mu sync.RWMutex
 
 	nextFileId uint64
+
+	tableCache cache.Cache
+	blockCache cache.Cache
 }
 
 func NewStorage(db *DB) *Storage {
 	return &Storage{
-		db:     db,
-		level0: make([]*table, 0),
-		levels: make([][]*table, 0),
-		mu:     sync.RWMutex{},
+		db:         db,
+		level0:     make([]*table, 0),
+		levels:     make([]tables, 0),
+		mu:         sync.RWMutex{},
+		tableCache: cache.NewLRUCache(FileCacheCapacity),
+		blockCache: cache.NewLRUCache(BlockCacheCapacity),
 	}
 }
 
@@ -170,12 +158,7 @@ func (s *Storage) get(key []byte) ([]byte, bool) {
 	// TODO: read table when major compacting
 	for i := len(s.level0) - 1; i > -1; i-- {
 		table := s.level0[i]
-		f, err := table.open(true)
-		if err != nil {
-			// TODO: panic
-			return nil, false
-		}
-		reader, err := sstable.NewTableReader(f, table.size)
+		reader, err := s.open(table)
 		if err != nil {
 			return nil, false
 		}
@@ -188,13 +171,47 @@ func (s *Storage) get(key []byte) ([]byte, bool) {
 	return nil, false
 }
 
-func (s *Storage) newIterator() []iterator.Iterator {
+func (s *Storage) open(t *table) (*sstable.TableReader, error) {
+	r := s.tableCache.Get(t.id, func() (interface{}, int64) {
+		name := t.getTableName()
+		f, err := openFile(name, true)
+		if err != nil {
+			return nil, 0
+		}
+
+		nsCache := cache.NewNamespaceCache(s.blockCache, t.id)
+
+		reader, err := sstable.NewTableReader(f, t.size, nsCache)
+		if err != nil {
+			return nil, 0
+		}
+		return reader, 1
+	})
+
+	if r == nil {
+		return nil, fmt.Errorf("open table: %v err", t)
+	}
+	return r.(*sstable.TableReader), nil
+}
+
+func (s *Storage) newIterator(t *table) iterator.Iterator {
+	r, err := s.open(t)
+	if err != nil {
+		return nil
+	}
+	return r.NewIterator()
+}
+
+func (s *Storage) getIterators() []iterator.Iterator {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	iters := make([]iterator.Iterator, len(s.level0))
-	for i, table := range s.level0 {
-		iters[i] = table.newIterator()
+	iters := make([]iterator.Iterator, 0, len(s.level0)+len(s.levels))
+	for _, table := range s.level0 {
+		iters = append(iters, s.newIterator(table))
+	}
+	for _, level := range s.levels {
+		iters = append(iters, level.newIndexIterator(s, s.db.cmp))
 	}
 	return iters
 }

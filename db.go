@@ -87,7 +87,7 @@ func (d *DB) NewIterator() iterator.Iterator {
 		iters = append(iters, immtable.NewIterator())
 	}
 
-	iters = append(iters, d.storage.newIterator()...)
+	iters = append(iters, d.storage.getIterators()...)
 
 	mergeIter := iterator.NewMergeIterator(iters, d.cmp)
 	return mergeIter
