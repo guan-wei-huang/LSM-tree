@@ -52,3 +52,40 @@ func decodeIndexEntry(data []byte) (offset uint64, len uint64) {
 	len, _ = binary.Uvarint(data[n1:])
 	return
 }
+
+func hash(data []byte) uint32 {
+	// Similar to murmur hash
+	const (
+		m    = uint32(0xc6a4a793)
+		r    = uint32(24)
+		seed = 0xbc9f1d34
+	)
+	var (
+		h = seed ^ (uint32(len(data)) * m)
+		i int
+	)
+
+	for n := len(data) - len(data)%4; i < n; i += 4 {
+		h += binary.LittleEndian.Uint32(data[i:])
+		h *= m
+		h ^= (h >> 16)
+	}
+
+	switch len(data) - i {
+	default:
+		panic("not reached")
+	case 3:
+		h += uint32(data[i+2]) << 16
+		fallthrough
+	case 2:
+		h += uint32(data[i+1]) << 8
+		fallthrough
+	case 1:
+		h += uint32(data[i])
+		h *= m
+		h ^= (h >> r)
+	case 0:
+	}
+
+	return h
+}

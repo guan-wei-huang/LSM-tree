@@ -73,6 +73,42 @@ func (b *BlockBuilder) reset() {
 	b.offsets = b.offsets[:0]
 }
 
+type FilterBuilder struct {
+	bloom *bloomFilterGenerator
+	buf   *bytes.Buffer
+
+	offsets []uint32
+}
+
+func NewFilterBuilder() *FilterBuilder {
+	buf := make([]byte, 0)
+	return &FilterBuilder{
+		bloom: NewBloomFilterGenerator(),
+		buf:   bytes.NewBuffer(buf),
+	}
+}
+
+func (f *FilterBuilder) addKey(key []byte) {
+	f.bloom.add(key)
+}
+
+func (f *FilterBuilder) arrange() {
+	f.offsets = append(f.offsets, uint32(f.buf.Len()))
+
+	filterEntry := f.bloom.build()
+	if _, err := f.buf.Write(filterEntry); err != nil {
+		// TODO: handle
+		return
+	}
+}
+
+func (f *FilterBuilder) build() *Block {
+	return &Block{
+		data:   f.buf.Bytes(),
+		offset: f.offsets,
+	}
+}
+
 /*
 block format:
 
@@ -210,7 +246,7 @@ func (b *IndexBlock) entry(i int) (desc []byte, minKey []byte) {
 	return b.data[idx+n1 : keyIdx], b.data[keyIdx : keyIdx+int(keyLen)]
 }
 
-// seek is for index block, to find the block that may contain key
+// find out which block the key might fall in and return its index
 func (b *IndexBlock) seek(cmp compare.Comparator, key []byte) int {
 	f := func(i int) bool {
 		_, minKey := b.entry(i)
@@ -300,4 +336,23 @@ func (i *IndexBlockIterator) Get() iterator.Iterator {
 		return nil
 	}
 	return NewBlockIterator(i.reader.cmp, b)
+}
+
+type FilterBlock struct {
+	block *Block
+	bf    bloomFilter
+}
+
+func (f *FilterBlock) contain(index int, key []byte) bool {
+	if index < 0 || index >= f.block.numEntries() {
+		return false
+	}
+
+	offset, size := f.block.offset[index], uint32(0)
+	if index == f.block.numEntries()-1 {
+		size = uint32(len(f.block.data)) - offset
+	} else {
+		size = f.block.offset[index+1] - f.block.offset[index]
+	}
+	return f.bf.contain(f.block.data[offset:offset+size], key)
 }

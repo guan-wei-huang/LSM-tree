@@ -16,13 +16,15 @@ func ErrorNotFound(key []byte) error {
 /*
 table format:
 
-	| block1 | block2 | .. | index block |  index block offset | index block len |
+	| block1 | block2 | .. | filter block | index block | filter block offset | filter block len | index block offset | index block len |
 */
 type TableWriter struct {
-	block      *BlockBuilder
-	indexBlock *BlockBuilder
-	firstKey   []byte
-	offset     int
+	block       *BlockBuilder
+	indexBlock  *BlockBuilder
+	filterBlock *FilterBuilder
+
+	firstKey []byte
+	offset   int
 
 	// default: 4 KB
 	blockSize int
@@ -32,12 +34,13 @@ type TableWriter struct {
 
 func NewTableWriter(writer io.WriteCloser, blockSize int) *TableWriter {
 	return &TableWriter{
-		block:      NewBlockBuilder(),
-		firstKey:   nil,
-		offset:     0,
-		blockSize:  blockSize,
-		writer:     writer,
-		indexBlock: NewBlockBuilder(),
+		block:       NewBlockBuilder(),
+		indexBlock:  NewBlockBuilder(),
+		filterBlock: NewFilterBuilder(),
+		firstKey:    nil,
+		offset:      0,
+		blockSize:   blockSize,
+		writer:      writer,
 	}
 }
 
@@ -47,6 +50,8 @@ func (s *TableWriter) Append(key, val []byte) {
 	}
 
 	s.block.append(key, val)
+	s.filterBlock.addKey(key)
+
 	if s.block.estimateSize() >= s.blockSize {
 		s.finishBlock()
 	}
@@ -59,6 +64,8 @@ func (s *TableWriter) finishBlock() error {
 	if err != nil {
 		return err
 	}
+
+	s.filterBlock.arrange()
 
 	s.indexBlock.appendIndex(s.firstKey, s.offset, n)
 
@@ -81,23 +88,35 @@ func (s *TableWriter) Flush() (tableSize uint64, err error) {
 		}
 	}
 
-	indexBlock := s.indexBlock.build()
-	encIndexBlock := encodeBlock(indexBlock)
-	n, err := s.writer.Write(encIndexBlock)
+	filterBlock := s.filterBlock.build()
+	encFilterBlock := encodeBlock(filterBlock)
+	n1, err := s.writer.Write(encFilterBlock)
 	if err != nil {
 		return 0, err
 	}
 
-	footer := make([]byte, 8)
-	// start index of meta block
+	indexBlock := s.indexBlock.build()
+	encIndexBlock := encodeBlock(indexBlock)
+	n2, err := s.writer.Write(encIndexBlock)
+	if err != nil {
+		return 0, err
+	}
+
+	footer := make([]byte, 16)
+	// offset of filter block
 	binary.BigEndian.PutUint32(footer[0:4], uint32(s.offset))
-	// len of meta block
-	binary.BigEndian.PutUint32(footer[4:8], uint32(n))
+	// len of filter block
+	binary.BigEndian.PutUint32(footer[4:8], uint32(n1))
+	// offset of index block
+	binary.BigEndian.PutUint32(footer[8:12], uint32(s.offset+n1))
+	// len of index block
+	binary.BigEndian.PutUint32(footer[12:16], uint32(n2))
+
 	if _, err = s.writer.Write(footer); err != nil {
 		return 0, err
 	}
 
-	return uint64(s.offset + n + 8), nil
+	return uint64(s.offset + n1 + n2 + 16), nil
 }
 
 func (s *TableWriter) EstimateSize() int {
@@ -114,7 +133,8 @@ type TableReader struct {
 
 	cmp compare.Comparator
 
-	indexBlock *IndexBlock
+	indexBlock  *IndexBlock
+	filterBlock *FilterBlock
 
 	blockCache cache.Cache
 }
@@ -126,13 +146,24 @@ func NewTableReader(r io.ReaderAt, tableSize int, blockCache cache.Cache) (*Tabl
 		blockCache: blockCache,
 	}
 
-	footer := make([]byte, 8)
-	if _, err := r.ReadAt(footer, int64(tableSize-8)); err != nil {
+	footer := make([]byte, 16)
+	if _, err := r.ReadAt(footer, int64(tableSize-16)); err != nil {
 		return nil, err
 	}
-	idxOffset := binary.BigEndian.Uint32(footer[:4])
-	idxSize := binary.BigEndian.Uint32(footer[4:8])
 
+	filterOffset := binary.BigEndian.Uint32(footer[:4])
+	filterSize := binary.BigEndian.Uint32(footer[4:8])
+	filterBlock, err := reader.readBlock(uint64(filterOffset), uint64(filterSize))
+	if err != nil {
+		return nil, err
+	}
+	reader.filterBlock = &FilterBlock{
+		block: filterBlock,
+		bf:    bloomFilter{},
+	}
+
+	idxOffset := binary.BigEndian.Uint32(footer[8:12])
+	idxSize := binary.BigEndian.Uint32(footer[12:])
 	idxBlock, err := reader.readBlock(uint64(idxOffset), uint64(idxSize))
 	if err != nil {
 		return nil, err
@@ -144,19 +175,21 @@ func NewTableReader(r io.ReaderAt, tableSize int, blockCache cache.Cache) (*Tabl
 
 func (r *TableReader) Get(key []byte) ([]byte, error) {
 	idx := r.indexBlock.seek(r.cmp, key)
-	meta, _ := r.indexBlock.entry(idx)
-	if meta == nil {
+	if exist := r.filterBlock.contain(idx, key); !exist {
 		return nil, ErrorNotFound(key)
 	}
 
-	off, size := decodeIndexEntry(meta)
+	desc, _ := r.indexBlock.entry(idx)
+	if desc == nil {
+		return nil, ErrorNotFound(key)
+	}
 
+	off, size := decodeIndexEntry(desc)
 	block, err := r.readBlock(off, size)
 	if err != nil {
 		return nil, err
 	}
 
-	// TODO: due to bloom filter, its only necessary to check for 'ok'
 	val, ok := block.get(r.cmp, key)
 	if !ok {
 		return nil, ErrorNotFound(key)
