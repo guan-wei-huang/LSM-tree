@@ -26,7 +26,9 @@ const (
 	LogFile
 )
 
-type Config struct {
-}
+var DirectoryPath = "./lsm"
 
 var DefaultComparator = compare.BasicComparator{}
+
+type Config struct {
+}

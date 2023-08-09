@@ -3,7 +3,13 @@ package lsm
 import (
 	"fmt"
 	"os"
+	"time"
 )
+
+func createDir() error {
+	DirectoryPath = fmt.Sprintf("./lsm/%v", time.Now())
+	return os.MkdirAll(DirectoryPath, 0777)
+}
 
 // create file if doesnt exist
 func openFile(fname string, readOnly bool) (*os.File, error) {
@@ -21,9 +27,9 @@ func openFile(fname string, readOnly bool) (*os.File, error) {
 
 func fileName(ftype FileType, id uint64) string {
 	if ftype == SstableFile {
-		return fmt.Sprintf("sst-%v.ldb", id)
+		return fmt.Sprintf("%v/sst-%v.ldb", DirectoryPath, id)
 	} else if ftype == LogFile {
-		return fmt.Sprintf("log-%v.log", id)
+		return fmt.Sprintf("%v/log-%v.log", DirectoryPath, id)
 	}
 	return ""
 }

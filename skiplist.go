@@ -17,7 +17,7 @@ func NewNode(key, val []byte, height uint) *Node {
 	return &Node{
 		key:     key,
 		val:     val,
-		forward: make([]*Node, height),
+		forward: make([]*Node, height+1),
 	}
 }
 
@@ -34,7 +34,8 @@ type SkipList struct {
 func NewSkiplist(cmp compare.Comparator) *SkipList {
 	list := SkipList{
 		maxHeight: 12,
-		prob:      0.5,
+		curHeight: 0,
+		prob:      0.25,
 		head:      NewNode(nil, nil, 12),
 
 		cmp: cmp,
@@ -55,9 +56,10 @@ func (l *SkipList) findGreaterOrEqual(key []byte, prev []*Node) *Node {
 	return node.forward[0]
 }
 
-func (l *SkipList) Get(key []byte) (val []byte, err bool) {
+func (l *SkipList) Get(key []byte) (val []byte, exist bool) {
 	node := l.findGreaterOrEqual(key, nil)
 	if node != nil && l.cmp.Compare(node.key, key) == 0 {
+		val = make([]byte, len(node.val))
 		copy(val, node.val)
 		return val, true
 	}
@@ -77,7 +79,7 @@ func (l *SkipList) Insert(key, val []byte) {
 		l.curHeight = height
 	}
 
-	for i := 0; i <= int(l.curHeight); i++ {
+	for i := 0; i <= int(height); i++ {
 		newNode.forward[i] = prev[i].forward[i]
 		prev[i].forward[i] = newNode
 	}
@@ -85,7 +87,7 @@ func (l *SkipList) Insert(key, val []byte) {
 
 func (l *SkipList) randomHeight() uint {
 	var height uint = 1
-	for height < l.maxHeight && rand.Float32() >= l.prob {
+	for height < l.maxHeight && rand.Float32() < l.prob {
 		height++
 	}
 	return height
