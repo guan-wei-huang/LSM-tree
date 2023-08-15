@@ -7,16 +7,22 @@ const (
 	MB = 1024 * KB
 )
 
-const (
+var (
 	DefaultBlockSize    = 4 * KB
 	DefaultMemtableSize = 2 * MB
 
-	Level0FileNumber = 5
+	Level0FileNumber = 4
 	FileSize         = 2 * MB
 	Level1FilesSize  = 10 * MB
+	SizeMultiplier   = 10
+	MaximumLevel     = 10
 
 	FileCacheCapacity  = 500
 	BlockCacheCapacity = 8 * MB
+
+	DirectoryPath = "./lsm"
+
+	DefaultComparator = compare.BasicComparator{}
 )
 
 type FileType int
@@ -26,9 +32,6 @@ const (
 	LogFile
 )
 
-var DirectoryPath = "./lsm"
-
-var DefaultComparator = compare.BasicComparator{}
-
 type Config struct {
+	// TODO: customize config
 }

@@ -40,7 +40,7 @@ func (t *TwoLevelIterator) First() {
 }
 
 func (t *TwoLevelIterator) Next() {
-	if t.Iterator.Valid() {
+	if t.Iterator != nil && t.Iterator.Valid() {
 		if t.Iterator.Next(); !t.Iterator.Valid() {
 			if t.IndexIterator.Next(); t.IndexIterator.Valid() {
 				t.Iterator = t.IndexIterator.Get()
@@ -83,10 +83,7 @@ func NewMergeIterator(iters []Iterator, cmp compare.Comparator) *MergeIterator {
 	m := &MergeIterator{
 		cmp:   cmp,
 		iters: iters,
-		idx:   make([]int, len(iters)),
-	}
-	for i := range iters {
-		m.idx[i] = i
+		idx:   make([]int, 0),
 	}
 	m.First()
 
@@ -94,7 +91,7 @@ func NewMergeIterator(iters []Iterator, cmp compare.Comparator) *MergeIterator {
 }
 
 func (m *MergeIterator) Len() int {
-	return len(m.iters)
+	return len(m.idx)
 }
 
 func (m *MergeIterator) Less(i, j int) bool {
@@ -102,7 +99,7 @@ func (m *MergeIterator) Less(i, j int) bool {
 
 	if !m.iters[i].Valid() {
 		return false
-	} else if !m.iters[i].Valid() {
+	} else if !m.iters[j].Valid() {
 		return true
 	}
 

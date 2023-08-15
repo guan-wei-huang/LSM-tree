@@ -11,15 +11,15 @@ type MemTable struct {
 	table *SkipList
 
 	mu sync.RWMutex
-
-	// compact only when ref <= 1
-	// ref int32
 	wg sync.WaitGroup
+
+	compacting bool
 }
 
 func NewMemTable(cmp compare.Comparator) *MemTable {
 	return &MemTable{
-		table: NewSkiplist(cmp),
+		table:      NewSkiplist(cmp),
+		compacting: false,
 	}
 }
 

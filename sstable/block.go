@@ -298,22 +298,23 @@ func (i *IndexBlockIterator) First() {
 }
 
 func (i *IndexBlockIterator) Next() {
-	i.curIdx = max(i.curIdx+1, i.indexBlock.numEntries())
+	i.curIdx = min(i.curIdx+1, i.indexBlock.numEntries())
 	i.key, i.val = i.indexBlock.entry(i.curIdx)
 }
 
 func (i *IndexBlockIterator) Prev() {
-	i.curIdx = min(i.curIdx-1, -1)
+	i.curIdx = max(i.curIdx-1, -1)
 	i.key, i.val = i.indexBlock.entry(i.curIdx)
 }
 
 func (i *IndexBlockIterator) Seek(key []byte) {
 	idx := i.indexBlock.seek(i.reader.cmp, key)
 	i.curIdx = idx
+	i.key, i.val = i.indexBlock.entry(idx)
 }
 
 func (i *IndexBlockIterator) Valid() bool {
-	return i.curIdx < i.indexBlock.numEntries() && i.curIdx > 0
+	return i.curIdx < i.indexBlock.numEntries() && i.curIdx >= 0
 }
 
 func (i *IndexBlockIterator) Key() []byte {

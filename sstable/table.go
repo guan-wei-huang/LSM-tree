@@ -120,7 +120,7 @@ func (s *TableWriter) Flush() (tableSize uint64, err error) {
 }
 
 func (s *TableWriter) EstimateSize() int {
-	return s.offset
+	return s.offset + s.block.estimateSize() + s.indexBlock.estimateSize()
 }
 
 func (s *TableWriter) Close() {
@@ -129,7 +129,7 @@ func (s *TableWriter) Close() {
 
 type TableReader struct {
 	r    io.ReaderAt
-	size int
+	size uint64
 
 	cmp compare.Comparator
 
@@ -139,9 +139,10 @@ type TableReader struct {
 	blockCache cache.Cache
 }
 
-func NewTableReader(r io.ReaderAt, tableSize int, blockCache cache.Cache) (*TableReader, error) {
+func NewTableReader(r io.ReaderAt, cmp compare.Comparator, tableSize uint64, blockCache cache.Cache) (*TableReader, error) {
 	reader := &TableReader{
 		r:          r,
+		cmp:        cmp,
 		size:       tableSize,
 		blockCache: blockCache,
 	}

@@ -100,13 +100,18 @@ func NewLRUCache(capacity int64) *LRUCache {
 	return cache
 }
 
-func (c *LRUCache) Get(key uint64, fetchFunc func() (interface{}, int64)) interface{} {
+func (c *LRUCache) get(key uint64) (*node, bool) {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	n, ok := c.table[key]
+	c.mu.RUnlock()
+
+	return n, ok
+}
+
+func (c *LRUCache) Get(key uint64, fetchFunc func() (interface{}, int64)) interface{} {
+	n, ok := c.get(key)
 	if !ok {
-		n := &node{}
+		n = &node{}
 		n.val, n.size = fetchFunc()
 
 		c.mu.Lock()
@@ -128,10 +133,7 @@ func (c *LRUCache) Get(key uint64, fetchFunc func() (interface{}, int64)) interf
 }
 
 func (c *LRUCache) Remove(key uint64) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	n, ok := c.table[key]
+	n, ok := c.get(key)
 	if ok {
 		c.mu.Lock()
 		delete(c.table, n.key)

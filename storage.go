@@ -6,6 +6,7 @@ import (
 	"lsm/iterator"
 	cache "lsm/lru-cache"
 	"lsm/sstable"
+	"sort"
 	"sync"
 )
 
@@ -39,7 +40,7 @@ func (t *tWriter) finish() (*table, error) {
 
 	tt := &table{
 		id:     t.id,
-		size:   int(size),
+		size:   size,
 		minKey: t.minKey,
 		maxKey: t.maxKey,
 	}
@@ -48,7 +49,7 @@ func (t *tWriter) finish() (*table, error) {
 
 type table struct {
 	id   uint64
-	size int
+	size uint64
 
 	minKey, maxKey []byte
 }
@@ -59,8 +60,32 @@ func (t *table) getTableName() string {
 
 type tables []*table
 
-func (t *tables) newIndexIterator(s *Storage, cmp compare.Comparator) iterator.IndexIterator {
-	return newLevelFilesIterator(s, *t, cmp)
+func (t tables) Len() int                    { return len(t) }
+func (t tables) Swap(i, j int)               { t[i], t[j] = t[j], t[i] }
+func (t tables) sort(cmp compare.Comparator) { sort.Sort(tablesSorter{t, cmp}) }
+
+func (t tables) newIndexIterator(s *Storage, cmp compare.Comparator) iterator.IndexIterator {
+	return newLevelFilesIterator(s, t, cmp)
+}
+
+func (t tables) search(cmp compare.Comparator, key []byte) int {
+	n := len(t)
+	idx := sort.Search(n, func(i int) bool {
+		return cmp.Compare(t[i].maxKey, key) >= 0
+	})
+	if idx != n && cmp.Compare(t[idx].minKey, key) <= 0 {
+		return idx
+	}
+	return -1
+}
+
+type tablesSorter struct {
+	tables
+	cmp compare.Comparator
+}
+
+func (t tablesSorter) Less(i, j int) bool {
+	return t.cmp.Compare(t.tables[i].minKey, t.tables[j].minKey) < 0
 }
 
 type levelFilesIterator struct {
@@ -130,7 +155,8 @@ func (i *levelFilesIterator) Get() iterator.Iterator {
 }
 
 type Storage struct {
-	db *DB
+	db  *DB
+	cmp compare.Comparator
 
 	level0 []*table
 	levels []tables
@@ -144,27 +170,44 @@ type Storage struct {
 }
 
 func NewStorage(db *DB) *Storage {
+	if err := createDir(); err != nil {
+		panic(err)
+	}
 	return &Storage{
 		db:         db,
+		cmp:        db.cmp,
 		level0:     make([]*table, 0),
-		levels:     make([]tables, 0),
+		levels:     make([]tables, MaximumLevel),
 		mu:         sync.RWMutex{},
-		tableCache: cache.NewLRUCache(FileCacheCapacity),
-		blockCache: cache.NewLRUCache(BlockCacheCapacity),
+		tableCache: cache.NewLRUCache(int64(FileCacheCapacity)),
+		blockCache: cache.NewLRUCache(int64(BlockCacheCapacity)),
 	}
 }
 
 func (s *Storage) get(key []byte) ([]byte, bool) {
-	// TODO: read table when major compacting
 	for i := len(s.level0) - 1; i > -1; i-- {
 		table := s.level0[i]
 		reader, err := s.open(table)
 		if err != nil {
 			return nil, false
 		}
-
 		if val, err := reader.Get(key); err == nil {
 			return val, true
+		}
+	}
+
+	for _, tables := range s.levels {
+		if len(tables) == 0 {
+			continue
+		}
+		if idx := tables.search(s.cmp, key); idx != -1 {
+			reader, err := s.open(tables[idx])
+			if err != nil {
+				return nil, false
+			}
+			if val, err := reader.Get(key); err == nil {
+				return val, true
+			}
 		}
 	}
 
@@ -181,7 +224,7 @@ func (s *Storage) open(t *table) (*sstable.TableReader, error) {
 
 		nsCache := cache.NewNamespaceCache(s.blockCache, t.id)
 
-		reader, err := sstable.NewTableReader(f, t.size, nsCache)
+		reader, err := sstable.NewTableReader(f, s.cmp, t.size, nsCache)
 		if err != nil {
 			return nil, 0
 		}
@@ -211,7 +254,7 @@ func (s *Storage) getIterators() []iterator.Iterator {
 		iters = append(iters, s.newIterator(table))
 	}
 	for _, level := range s.levels {
-		iters = append(iters, level.newIndexIterator(s, s.db.cmp))
+		iters = append(iters, level.newIndexIterator(s, s.cmp))
 	}
 	return iters
 }
@@ -247,25 +290,47 @@ func (s *Storage) addTable(level int, t *table) {
 	s.checkCompaction()
 }
 
+func (s *Storage) numTables(level int) int {
+	if level == 0 {
+		return len(s.level0)
+	}
+	if level > len(s.levels) {
+		return 0
+	}
+	return len(s.levels[level-1])
+}
+
 func (s *Storage) checkCompaction() {
 	if len(s.level0) > Level0FileNumber {
-		s.db.levelCompact <- 0
+		s.db.levelCompact <- compactRange{level: 0}
 		return
 	}
 
 	for level, tables := range s.levels {
-		totalSize := 0
+		totalSize := uint64(0)
 		for _, t := range tables {
 			totalSize += t.size
 		}
 		if totalSize >= levelFilesSize(level+1) {
-			s.db.levelCompact <- level
+			s.db.levelCompact <- compactRange{level: level + 1}
 			return
 		}
 	}
 }
 
-func (s *Storage) peekCompaction(level int) *compaction {
+func (s *Storage) checkLevelCompaction(level int) bool {
+	if level == 0 {
+		return len(s.level0) > Level0FileNumber
+	}
+
+	totalSize := uint64(0)
+	for _, table := range s.levels[level-1] {
+		totalSize += table.size
+	}
+	return totalSize >= levelFilesSize(level)
+}
+
+func (s *Storage) pickCompaction(level int) *compaction {
 	comp := compaction{
 		level: level,
 	}
@@ -274,33 +339,74 @@ func (s *Storage) peekCompaction(level int) *compaction {
 	if level == 0 {
 		flevel = append(flevel, s.level0...)
 	} else {
-		flevel = append(flevel, s.levels[level][0])
+		flevel = append(flevel, s.levels[level-1][0])
 	}
 
 	minKey, maxKey := flevel[0].minKey, flevel[0].maxKey
 	for _, t := range comp.tables[0] {
-		if s.db.cmp.Compare(t.minKey, minKey) < 0 {
+		if s.cmp.Compare(t.minKey, minKey) < 0 {
 			minKey = t.minKey
 		}
-		if s.db.cmp.Compare(t.maxKey, maxKey) > 0 {
+		if s.cmp.Compare(t.maxKey, maxKey) > 0 {
 			maxKey = t.maxKey
 		}
 	}
 
 	comp.tables[0] = flevel
-	comp.tables[1] = append(comp.tables[1], s.overlapTables(level+1, minKey, maxKey)...)
+	comp.tables[1] = s.overlapTables(level+1, minKey, maxKey)
 
 	return &comp
 }
 
 func (s *Storage) overlapTables(level int, minKey, maxKey []byte) []*table {
+	if level > len(s.levels) {
+		return nil
+	}
+
 	tables := make([]*table, 0)
 	for _, t := range s.levels[level-1] {
-		if !(s.db.cmp.Compare(t.minKey, maxKey) > 0 || s.db.cmp.Compare(t.maxKey, minKey) < 0) {
+		if !(s.cmp.Compare(t.minKey, maxKey) > 0 || s.cmp.Compare(t.maxKey, minKey) < 0) {
 			tables = append(tables, t)
 		}
 	}
 	return tables
+}
+
+func (s *Storage) applyCompaction(level int, addTable, deleteTable []*table) {
+	deleteMap := make(map[uint64]struct{})
+	for _, dt := range deleteTable {
+		deleteMap[dt.id] = struct{}{}
+	}
+
+	cleanup := func(tables []*table) []*table {
+		newTables := make([]*table, 0)
+		for _, t := range tables {
+			if _, exist := deleteMap[t.id]; !exist {
+				newTables = append(newTables, t)
+			}
+		}
+		return newTables
+	}
+
+	s.mu.Lock()
+
+	if level == 0 {
+		s.level0 = cleanup(s.level0)
+	} else {
+		s.levels[level-1] = cleanup(s.levels[level-1])
+	}
+
+	s.levels[level] = append(cleanup(s.levels[level]), addTable...)
+	s.levels[level].sort(s.cmp)
+
+	s.mu.Unlock()
+
+	for _, dt := range deleteTable {
+		if err := removeFile(dt.getTableName()); err != nil {
+			// TODO
+			panic(err)
+		}
+	}
 }
 
 func (s *Storage) newFileId() uint64 {

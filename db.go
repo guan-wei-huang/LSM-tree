@@ -10,24 +10,26 @@ type DB struct {
 	mtable   *MemTable
 	immtable *MemTable
 
+	storage *Storage
+	journal *journal
+	cmp     compare.Comparator
+
 	mu sync.RWMutex
 
 	memCompact   chan bool
-	levelCompact chan int
+	levelCompact chan compactRange
 	errCompact   chan error
 
-	storage *Storage
-
-	journal *journal
-
-	cmp compare.Comparator
+	// for testing
+	pauseChan chan struct{}
 }
 
 func New() *DB {
 	db := &DB{
-		memCompact:   make(chan bool),
-		levelCompact: make(chan int),
-		errCompact:   make(chan error),
+		memCompact:   make(chan bool, 3),
+		levelCompact: make(chan compactRange, 5),
+		errCompact:   make(chan error, 10),
+		pauseChan:    make(chan struct{}, 1),
 
 		cmp: DefaultComparator,
 	}
@@ -40,7 +42,7 @@ func New() *DB {
 }
 
 func (d *DB) Put(key, val []byte) {
-	d.journal.Write(encodeWriteData(WriteOperationPut, key, val))
+	d.journal.WriteRecord(WriteOperationPut, key, val)
 
 	mtable, _ := d.getMemTables(false)
 	mtable.Put(key, val)
@@ -49,14 +51,13 @@ func (d *DB) Put(key, val []byte) {
 	if mtable.estimateSize() >= DefaultMemtableSize {
 		d.mu.Lock()
 		if d.immtable != mtable {
-			d.immtable = mtable
+			d.frozenMem()
 			d.newMem()
 
 			d.memCompact <- true
 		}
 		d.mu.Unlock()
 	}
-
 }
 
 func (d *DB) Get(key []byte) []byte {
@@ -93,44 +94,8 @@ func (d *DB) NewIterator() iterator.Iterator {
 	return mergeIter
 }
 
-func (d *DB) goCompaction() {
-	for {
-		select {
-		case <-d.memCompact:
-			if d.immtable != nil {
-				d.memCompaction()
-				continue
-			}
-		case level := <-d.levelCompact:
-			compact := d.storage.peekCompaction(level)
-			d.majorCompaction(compact)
-		}
-	}
-}
-
-func (d *DB) memCompaction() {
-	table := d.immtable
-
-	// wait other put request done
-	table.wait()
-
-	iter := table.NewIterator()
-	tWriter := d.storage.newTable()
-	for ; iter.Valid(); iter.Next() {
-		tWriter.append(iter.Key(), iter.Value())
-	}
-
-	tInfo, err := tWriter.finish()
-	if err != nil {
-		d.errCompact <- err
-		return
-	}
-
-	d.storage.addTable(0, tInfo)
-
-	d.mu.Lock()
-	d.immtable = nil
-	d.mu.Unlock()
+func (d *DB) frozenMem() {
+	d.immtable = d.mtable
 }
 
 func (d *DB) getMemTables(readonly bool) (m, imm *MemTable) {
@@ -152,7 +117,7 @@ func (d *DB) getMemTables(readonly bool) (m, imm *MemTable) {
 func (d *DB) newMem() {
 	d.mtable = NewMemTable(d.cmp)
 
-	id := d.storage.nextFileId
+	id := d.storage.newFileId()
 	f, err := openFile(fileName(LogFile, id), false)
 	if err != nil {
 		// TODO: panic

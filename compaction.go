@@ -4,6 +4,12 @@ import (
 	"lsm/iterator"
 )
 
+type compactRange struct {
+	level  int
+	minKey []byte
+	maxKey []byte
+}
+
 type compaction struct {
 	level int
 
@@ -41,6 +47,38 @@ func (c *compTableBuilder) flush() error {
 	return nil
 }
 
+// finish clean buffer and return table
+func (c *compTableBuilder) finish() ([]*table, error) {
+	if c.w.estimateSize() > 0 {
+		if err := c.flush(); err != nil {
+			return nil, err
+		}
+	}
+	return c.tableInfo, nil
+}
+
+func (d *DB) goCompaction() {
+	for {
+		select {
+		case <-d.pauseChan:
+			// wait until resume
+			<-d.pauseChan
+		case <-d.memCompact:
+			if d.immtable != nil {
+				d.memCompaction()
+				continue
+			}
+		case cRange := <-d.levelCompact:
+			// TODO: record compaction history, to avoid trigger redundant compaction
+			if !d.storage.checkLevelCompaction(cRange.level) {
+				continue
+			}
+			compact := d.storage.pickCompaction(cRange.level)
+			d.majorCompaction(compact)
+		}
+	}
+}
+
 func (d *DB) majorCompaction(compact *compaction) {
 	iters := make([]iterator.Iterator, 0)
 
@@ -69,11 +107,49 @@ func (d *DB) majorCompaction(compact *compaction) {
 	for ; iter.Valid(); iter.Next() {
 		compBuilder.appendKV(iter.Key(), iter.Value())
 		if compBuilder.needFlush() {
-			compBuilder.flush()
+			if err := compBuilder.flush(); err != nil {
+				panic(err)
+			}
 		}
 	}
 
-	for _, table := range compBuilder.tableInfo {
-		d.storage.addTable(compact.level, table)
+	newTables, err := compBuilder.finish()
+	if err != nil {
+		// TODO
+		panic(err)
 	}
+
+	delTables := make([]*table, 0)
+	for _, tables := range compact.tables {
+		for _, t := range tables {
+			delTables = append(delTables, t)
+		}
+	}
+	d.storage.applyCompaction(compact.level, newTables, delTables)
+}
+
+func (d *DB) memCompaction() {
+	table := d.immtable
+
+	// wait other put request done
+	// TODO: combine multiple put requests into 1 thread, then it can avoid trigger many times of compaction
+	table.wait()
+
+	iter := table.NewIterator()
+	tWriter := d.storage.newTable()
+	for ; iter.Valid(); iter.Next() {
+		tWriter.append(iter.Key(), iter.Value())
+	}
+
+	tInfo, err := tWriter.finish()
+	if err != nil {
+		d.errCompact <- err
+		return
+	}
+
+	d.storage.addTable(0, tInfo)
+
+	d.mu.Lock()
+	d.immtable = nil
+	d.mu.Unlock()
 }

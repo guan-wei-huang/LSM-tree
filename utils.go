@@ -34,10 +34,14 @@ func fileName(ftype FileType, id uint64) string {
 	return ""
 }
 
-func levelFilesSize(level int) int {
-	size := Level1FilesSize
+func removeFile(fname string) error {
+	return os.Remove(fname)
+}
+
+func levelFilesSize(level int) uint64 {
+	size := uint64(Level1FilesSize)
 	for i := 2; i <= level; i += 1 {
-		size *= 10
+		size *= uint64(SizeMultiplier)
 	}
 	return size
 }
