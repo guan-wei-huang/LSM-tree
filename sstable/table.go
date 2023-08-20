@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
 	"lsm/compare"
 	"lsm/iterator"
 	cache "lsm/lru-cache"
@@ -65,7 +66,7 @@ func (s *TableWriter) finishBlock() error {
 		return err
 	}
 
-	s.filterBlock.arrange()
+	s.filterBlock.finish()
 
 	s.indexBlock.appendIndex(s.firstKey, s.offset, n)
 
@@ -208,7 +209,7 @@ func (r *TableReader) readBlock(offset, size uint64) (*Block, error) {
 	block := r.blockCache.Get(offset, func() (interface{}, int64) {
 		data := make([]byte, size)
 		if _, err := r.r.ReadAt(data, int64(offset)); err != nil {
-			// TODO: handle err
+			log.Printf("lsm-tree: read block failed: %v", err)
 			return nil, 0
 		}
 		return decodeBlock(data), int64(len(data))

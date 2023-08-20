@@ -28,8 +28,8 @@ func New() *DB {
 	db := &DB{
 		memCompact:   make(chan bool, 3),
 		levelCompact: make(chan compactRange, 5),
-		errCompact:   make(chan error, 10),
-		pauseChan:    make(chan struct{}, 1),
+		errCompact:   make(chan error),
+		pauseChan:    make(chan struct{}),
 
 		cmp: DefaultComparator,
 	}
@@ -120,8 +120,7 @@ func (d *DB) newMem() {
 	id := d.storage.newFileId()
 	f, err := openFile(fileName(LogFile, id), false)
 	if err != nil {
-		// TODO: panic
-		return
+		panic(err)
 	}
 
 	if d.journal == nil {

@@ -3,6 +3,7 @@ package sstable
 import (
 	"bytes"
 	"encoding/binary"
+	"log"
 	"lsm/compare"
 	"lsm/iterator"
 )
@@ -92,12 +93,12 @@ func (f *FilterBuilder) addKey(key []byte) {
 	f.bloom.add(key)
 }
 
-func (f *FilterBuilder) arrange() {
+func (f *FilterBuilder) finish() {
 	f.offsets = append(f.offsets, uint32(f.buf.Len()))
 
 	filterEntry := f.bloom.build()
 	if _, err := f.buf.Write(filterEntry); err != nil {
-		// TODO: handle
+		log.Printf("lsm-tree: read block failed: %v", err)
 		return
 	}
 }
@@ -333,7 +334,7 @@ func (i *IndexBlockIterator) Get() iterator.Iterator {
 	offset, size := decodeIndexEntry(i.key)
 	b, err := i.reader.readBlock(offset, size)
 	if err != nil {
-		// TODO: panic
+		log.Printf("lsm-tree: read block failed: %v", err)
 		return nil
 	}
 	return NewBlockIterator(i.reader.cmp, b)

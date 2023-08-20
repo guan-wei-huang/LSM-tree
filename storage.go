@@ -2,6 +2,7 @@ package lsm
 
 import (
 	"fmt"
+	"log"
 	"lsm/compare"
 	"lsm/iterator"
 	cache "lsm/lru-cache"
@@ -263,8 +264,7 @@ func (s *Storage) newTable() *tWriter {
 	tid := s.newFileId()
 	tFile, err := openFile(fileName(SstableFile, tid), false)
 	if err != nil {
-		// TODO: panic
-		return nil
+		panic(err)
 	}
 
 	w := sstable.NewTableWriter(tFile, DefaultBlockSize)
@@ -403,8 +403,7 @@ func (s *Storage) applyCompaction(level int, addTable, deleteTable []*table) {
 
 	for _, dt := range deleteTable {
 		if err := removeFile(dt.getTableName()); err != nil {
-			// TODO
-			panic(err)
+			log.Printf("lsm-tree: remove useless file err: %v", err)
 		}
 	}
 }

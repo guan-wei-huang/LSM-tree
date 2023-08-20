@@ -115,7 +115,6 @@ func (d *DB) majorCompaction(compact *compaction) {
 
 	newTables, err := compBuilder.finish()
 	if err != nil {
-		// TODO
 		panic(err)
 	}
 

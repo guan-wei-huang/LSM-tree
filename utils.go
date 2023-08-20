@@ -17,7 +17,6 @@ func openFile(fname string, readOnly bool) (*os.File, error) {
 	if !readOnly {
 		flag |= os.O_RDWR
 	}
-	// TODO: file path
 	file, err := os.OpenFile(fname, flag, 0640)
 	if err != nil {
 		return nil, err
