@@ -108,10 +108,10 @@ func (c *LRUCache) get(key uint64) (*node, bool) {
 	return n, ok
 }
 
-func (c *LRUCache) Get(key uint64, fetchFunc func() (interface{}, int64)) interface{} {
+func (c *LRUCache) Get(key uint64, fetchFunc func() (val interface{}, size int64)) interface{} {
 	n, ok := c.get(key)
 	if !ok {
-		n = &node{}
+		n = &node{key: key}
 		n.val, n.size = fetchFunc()
 
 		c.mu.Lock()
